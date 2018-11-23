@@ -89,6 +89,16 @@ int tenth_chance()
 	return rand()%10 == 0;
 }
 
+void mess_with_tm()
+{
+	if (tenth_chance()) {
+		asm ("tbegin.	;"
+		     "beq 8	;");
+		if (half_chance())
+			asm("tsuspend.	;");
+	}
+}
+
 void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 {
 	ucontext_t *ucp = uc;
@@ -153,13 +163,7 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
-
-	if (tenth_chance()) {
-		asm ("tbegin.	;"
-		     "beq 8	;");
-		if (half_chance())
-			asm("tsuspend.	;");
-	}
+	mess_with_tm();
 	printf(".");
 }
 
@@ -196,6 +200,7 @@ void tm_trap_test(void)
 		if (t == 0) {
 			/* Once seed per process */
 			srand(time(NULL) + getpid());
+			mess_with_tm();
 			raise(SIGUSR1);
 			exit(0);
 		} else {
