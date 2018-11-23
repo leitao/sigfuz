@@ -27,6 +27,9 @@ ucontext_t init_context, main_context;
 static int count = 0;
 static int first_time = 0;
 
+/* Should be an argument. TODO */
+//#define STOP
+
 
 /* checkpoint context */
 ucontext_t *ckuc;
@@ -82,7 +85,6 @@ int tenth_chance()
 	return rand()%10 == 0;
 }
 
-#define STOP
 void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 {
 	ucontext_t *ucp = uc;
@@ -149,7 +151,6 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
-//	printf("NIP = %lx ", ucp->uc_link->uc_mcontext.gp_regs[PT_NIP]);
 	printf(".");
 
 	/*
