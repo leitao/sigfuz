@@ -1,6 +1,11 @@
 /*
- * Copyright 2018, Breno Leitao, Gustavo Romero, IBM Corp.
+ * Copyright 2018, Breno Leitao, IBM Corp.
  * Licensed under GPLv2.
+ *
+ * This is a Powerpc signal fuzzer. Where the output means:
+ *
+ * '.' An random context was generated
+ * '!' A segmentation fault happened
  */
 
 #define _GNU_SOURCE
@@ -91,8 +96,6 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 
 	ucp->uc_link = ckuc;
 
-	printf("Rand = %lx\n", rand());
-
 	/*  returns a garbase context 1/10 times */
 	if (tenth_chance())
 		memset(ucp->uc_link, rand(), sizeof(ucontext_t));
@@ -152,25 +155,13 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
 	printf(".");
-
-	/*
-	 * If the change above does not hit the bug, it will cause a
-	 * segmentation fault, since the ck structures are NULL.
-	 */
 }
 
 void seg_signal_handler(int signo, siginfo_t *si, void *uc)
 {
-	printf("Segv %d\n", count);
+	printf("!");
 
 	exit(-1);
-
-	if (count == COUNT_MAX) {
-		setcontext(&main_context);
-	}
-
-	count++;
-	setcontext(&init_context);
 }
 
 
