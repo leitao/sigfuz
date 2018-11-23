@@ -28,7 +28,6 @@
 #define MSR_TS_T        __MASK(MSR_TS_T_LG)     /*  Transaction Suspended */
 #define COUNT_MAX       1000		/* Number of interactions */
 
-ucontext_t init_context, main_context;
 static int count = 0;
 static int first_time = 0;
 
@@ -118,11 +117,11 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 
 
 	/* 1/100 of the runs mess up with MSR */
-	set_random(&ucp->uc_mcontext.gp_regs[PT_MSR], 100, 8);
-	set_random(&ucp->uc_link->uc_mcontext.gp_regs[PT_MSR], 100, 8);
+	set_random(&ucp->uc_mcontext.gp_regs[PT_MSR], 10, 8);
+	set_random(&ucp->uc_link->uc_mcontext.gp_regs[PT_MSR], 10, 8);
 
-	set_random(&ucp->uc_mcontext.gp_regs[PT_NIP], 100, 8);
-	set_random(&ucp->uc_link->uc_mcontext.gp_regs[PT_NIP], 100, 8);
+	set_random(&ucp->uc_mcontext.gp_regs[PT_NIP], 10, 8);
+	set_random(&ucp->uc_link->uc_mcontext.gp_regs[PT_NIP], 10, 8);
 
 	ucp->uc_mcontext.gp_regs[PT_TRAP] = r();
 	ucp->uc_mcontext.gp_regs[PT_DSISR] = r();
@@ -195,7 +194,6 @@ void tm_trap_test(void)
 		} else {
 			int ret;
 			wait(&ret);
-			//printf("Created pid = %d returned with %d\n", t, ret);
 		}
 #ifdef STOP
 		i++;
@@ -203,7 +201,6 @@ void tm_trap_test(void)
 	}
 
 	free(ckuc);
-	/* Should never hit this return */
 	return;
 }
 
@@ -211,11 +208,8 @@ static int first_time;
 
 int tm_signal_force_msr(void)
 {
-	/* Will get back here after COUNT_MAX interactions */
-	getcontext(&main_context);
 
-	if (!first_time++)
-		tm_trap_test();
+	tm_trap_test();
 
 	return 0;
 }
