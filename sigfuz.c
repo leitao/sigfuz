@@ -153,6 +153,13 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
+
+	if (tenth_chance()) {
+		asm ("tbegin.	;"
+		     "beq 8	;");
+		if (half_chance())
+			asm("tsuspend.	;");
+	}
 	printf(".");
 }
 
