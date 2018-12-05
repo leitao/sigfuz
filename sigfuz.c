@@ -28,16 +28,21 @@
 #define MSR_TS_T        __MASK(MSR_TS_T_LG)     /*  Transaction Suspended */
 #define COUNT_MAX       1000		/* Number of interactions */
 
+#define ARG_MESS_WITH_TM_AT	1
+#define ARG_MESS_WITH_TM_BEFORE 2
+
 static int count = 0;
 static int first_time = 0;
+static int args;
 
 /* Should be an argument. TODO */
 //#define STOP
 
-
 /* checkpoint context */
 ucontext_t *ckuc;
 
+
+/* Returns a 64-bits random number */
 long long r(){
 	long long f = rand();
 
@@ -78,23 +83,18 @@ int set_random(void *ptr, int chance, int bytes)
 	return 0;
 } 
 
-int half_chance()
+int one_in_chance(int x)
 {
-	return rand()%2;
-}
-
-
-int tenth_chance()
-{
-	return rand()%10 == 0;
+	return rand()%x == 0;
 }
 
 void mess_with_tm()
 {
-	if (tenth_chance()) {
+	/* Starts a transaction 20% of the time */
+	if (one_in_chance(5)) {
 		asm ("tbegin.	;"
 		     "beq 8	;");
-		if (half_chance())
+		if (one_in_chance(2));
 			asm("tsuspend.	;");
 	}
 }
@@ -106,23 +106,23 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link = ckuc;
 
 	/*  returns a garbase context 1/10 times */
-	if (tenth_chance())
+	if (one_in_chance(10))
 		memset(ucp->uc_link, rand(), sizeof(ucontext_t));
 	else
 		memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
 
 	/* Changing the checkpointed registers */
-	if (half_chance())
+	if (one_in_chance(4))
 		ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
 	else
-		if (half_chance())
+		if (one_in_chance(2))
 			ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
 
 	/* Checking the current register context */
-	if (half_chance())
+	if (one_in_chance(2))
 		ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
 	else
-		if (half_chance())
+		if (one_in_chance(2))
 			ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
 
 
@@ -163,7 +163,8 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
-	mess_with_tm();
+	if (args & ARG_MESS_WITH_TM_BEFORE)
+		mess_with_tm();
 	printf(".");
 }
 
@@ -200,7 +201,8 @@ void tm_trap_test(void)
 		if (t == 0) {
 			/* Once seed per process */
 			srand(time(NULL) + getpid());
-			mess_with_tm();
+			if (args & ARG_MESS_WITH_TM_AT)
+				mess_with_tm();
 			raise(SIGUSR1);
 			exit(0);
 		} else {
@@ -226,7 +228,33 @@ int tm_signal_force_msr(void)
 	return 0;
 }
 
+void show_help(char *name)
+{
+	printf("%s: Sigfuzzer for powerpc\n", name);
+	printf("Usage:\n");
+	printf("\t-b\t Mess with TM before raising a SIGUSR1 signal\n");
+	printf("\t-a\t Mess with TM after raising a SIGUSR1 signal\n");
+	exit(-1);
+}
+
 int main(int argc, char **argv)
 {
-	tm_signal_force_msr();
+	int opt;
+
+	while ((opt = getopt(argc, argv, "hba")) != -1) {
+		if (opt == 'b') {
+			printf("Messing with TM before signal\n");
+			args |= ARG_MESS_WITH_TM_BEFORE;
+		} else if (opt == 'a') {
+			printf("Messing with TM at signal handler\n");
+			args |= ARG_MESS_WITH_TM_AT;
+		} else if (opt == 'h') {
+			show_help(argv[0]);
+		}
+
+	}
+	if (args)
+		tm_signal_force_msr();
+	else
+		show_help(argv[0]);
 }
