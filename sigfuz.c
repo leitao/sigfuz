@@ -30,6 +30,8 @@
 
 #define ARG_MESS_WITH_TM_AT	1
 #define ARG_MESS_WITH_TM_BEFORE 2
+#define ARG_MESS_WITH_MSR_AT	4
+#define ARG_BOOM		-1
 
 static int count = 0;
 static int first_time = 0;
@@ -111,19 +113,22 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	else
 		memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
 
-	/* Changing the checkpointed registers */
-	if (one_in_chance(4))
-		ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
-	else
-		if (one_in_chance(2))
-			ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
+	if (args & ARG_MESS_WITH_MSR_AT) {
+		/* Changing the checkpointed registers */
+		if (one_in_chance(4))
+			ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
+		else
+			if (one_in_chance(2))
+				ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
 
-	/* Checking the current register context */
-	if (one_in_chance(2))
-		ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
-	else
+		/* Checking the current register context */
 		if (one_in_chance(2))
-			ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
+			ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
+		else
+			if (one_in_chance(2))
+				ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
+		printf("-");
+	}
 
 
 	/* 1/100 of the runs mess up with MSR */
@@ -163,14 +168,14 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
-	if (args & ARG_MESS_WITH_TM_BEFORE)
+	if (args & ARG_MESS_WITH_TM_BEFORE) {
 		mess_with_tm();
-	printf(".");
+		printf(".");
+	}
 }
 
 void seg_signal_handler(int signo, siginfo_t *si, void *uc)
 {
-	printf("!");
 
 	exit(-1);
 }
@@ -201,8 +206,10 @@ void tm_trap_test(void)
 		if (t == 0) {
 			/* Once seed per process */
 			srand(time(NULL) + getpid());
-			if (args & ARG_MESS_WITH_TM_AT)
+			if (args & ARG_MESS_WITH_TM_AT) {
 				mess_with_tm();
+				printf("!");
+			}
 			raise(SIGUSR1);
 			exit(0);
 		} else {
@@ -232,8 +239,10 @@ void show_help(char *name)
 {
 	printf("%s: Sigfuzzer for powerpc\n", name);
 	printf("Usage:\n");
-	printf("\t-b\t Mess with TM before raising a SIGUSR1 signal\n");
-	printf("\t-a\t Mess with TM after raising a SIGUSR1 signal\n");
+	printf("\t-b\tMess with TM before raising a SIGUSR1 signal\n");
+	printf("\t-a\tMess with TM after raising a SIGUSR1 signal\n");
+	printf("\t-m\tMess with MSR[TS] bits at signal handler machine context\n");
+	printf("\t-x\tMess with everything above\n");
 	exit(-1);
 }
 
@@ -241,13 +250,19 @@ int main(int argc, char **argv)
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "hba")) != -1) {
+	while ((opt = getopt(argc, argv, "hbaxmt")) != -1) {
 		if (opt == 'b') {
-			printf("Messing with TM before signal\n");
+			printf("Mess with TM before signal\n");
 			args |= ARG_MESS_WITH_TM_BEFORE;
 		} else if (opt == 'a') {
-			printf("Messing with TM at signal handler\n");
+			printf("Mess with TM at signal handler\n");
 			args |= ARG_MESS_WITH_TM_AT;
+		} else if (opt == 'm') {
+			printf("Mess with MSR[TS] bits at signal handler machine context\n");
+			args |= ARG_MESS_WITH_MSR_AT;
+		} else if (opt == 'x') {
+			printf("Mess with everything above\n");
+			args |= ARG_BOOM;
 		} else if (opt == 'h') {
 			show_help(argv[0]);
 		}
