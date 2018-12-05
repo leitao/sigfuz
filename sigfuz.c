@@ -225,7 +225,6 @@ void tm_trap_test(void)
 	return;
 }
 
-static int first_time;
 
 int tm_signal_force_msr(void)
 {
