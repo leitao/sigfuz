@@ -37,7 +37,7 @@
 
 static int first_time = 0;
 static int args;
-static int nthread;
+static int nthread = 1;
 
 /* checkpoint context */
 ucontext_t *ckuc;
