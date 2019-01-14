@@ -8,7 +8,6 @@
  * '!' A segmentation fault happened
  */
 
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <sys/types.h>
 #include <limits.h>
@@ -19,6 +18,8 @@
 #include <signal.h>
 #include <string.h>
 #include <ucontext.h>
+#include <sys/mman.h>
+#include <pthread.h>
 
 #define MSR_TS_S_LG     33              /* Trans Mem state: Suspended */
 #define MSR_TS_T_LG     34              /* Trans Mem state: Active */
@@ -31,14 +32,12 @@
 #define ARG_MESS_WITH_TM_AT	1
 #define ARG_MESS_WITH_TM_BEFORE 2
 #define ARG_MESS_WITH_MSR_AT	4
+#define ARG_SILENT		8
 #define ARG_BOOM		-1
 
-static int count = 0;
 static int first_time = 0;
 static int args;
-
-/* Should be an argument. TODO */
-//#define STOP
+static int nthread;
 
 /* checkpoint context */
 ucontext_t *ckuc;
@@ -93,12 +92,15 @@ int one_in_chance(int x)
 void mess_with_tm()
 {
 	/* Starts a transaction 20% of the time */
-	if (one_in_chance(5)) {
+	if (one_in_chance(3)) {
 		asm ("tbegin.	;"
 		     "beq 8	;");
-		if (one_in_chance(2));
+		if (one_in_chance(2))
 			asm("tsuspend.	;");
 	}
+
+	if (one_in_chance(20))
+		asm("tend.	;");
 }
 
 void trap_signal_handler(int signo, siginfo_t *si, void *uc)
@@ -108,10 +110,14 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link = ckuc;
 
 	/*  returns a garbase context 1/10 times */
-	if (one_in_chance(10))
+	if (one_in_chance(3))
 		memset(ucp->uc_link, rand(), sizeof(ucontext_t));
-	else
+	else if (one_in_chance(2))
 		memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
+	else {
+		ucp->uc_link = malloc(sizeof(ucontext_t));
+		madvise(ucp->uc_link, sizeof(ucontext_t), MADV_DONTNEED);
+	}
 
 	if (args & ARG_MESS_WITH_MSR_AT) {
 		/* Changing the checkpointed registers */
@@ -119,7 +125,11 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 			ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_S;
 		else
 			if (one_in_chance(2))
-				ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
+				ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |=
+							 MSR_TS_T;
+			else
+				ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] |=
+							MSR_TS_T | MSR_TS_S;
 
 		/* Checking the current register context */
 		if (one_in_chance(2))
@@ -127,7 +137,10 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 		else
 			if (one_in_chance(2))
 				ucp->uc_mcontext.gp_regs[PT_MSR] |= MSR_TS_T;
-		printf("-");
+			else
+				ucp->uc_mcontext.gp_regs[PT_MSR] |=
+						MSR_TS_T | MSR_TS_S;
+
 	}
 
 
@@ -150,8 +163,6 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_mcontext.gp_regs[PT_LNK] = r();
 	ucp->uc_mcontext.gp_regs[PT_CCR] = r();
 	ucp->uc_mcontext.gp_regs[PT_REGS_COUNT] = r();
-	ucp->uc_mcontext.gp_regs[PT_VRSAVE] = r();
-	ucp->uc_mcontext.gp_regs[PT_VSCR] = r();
 
 	ucp->uc_link->uc_mcontext.gp_regs[PT_TRAP] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_DSISR] = r();
@@ -165,12 +176,9 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	ucp->uc_link->uc_mcontext.gp_regs[PT_LNK] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_CCR] = r();
 	ucp->uc_link->uc_mcontext.gp_regs[PT_REGS_COUNT] = r();
-	ucp->uc_link->uc_mcontext.gp_regs[PT_VRSAVE] = r();
-	ucp->uc_link->uc_mcontext.gp_regs[PT_VSCR] = r();
 
 	if (args & ARG_MESS_WITH_TM_BEFORE) {
 		mess_with_tm();
-		printf(".");
 	}
 }
 
@@ -181,7 +189,7 @@ void seg_signal_handler(int signo, siginfo_t *si, void *uc)
 }
 
 
-void tm_trap_test(void)
+void *tm_trap_test(void *thrid)
 {
 	struct sigaction trap_sa, seg_sa;
 	int i = 0;
@@ -208,7 +216,6 @@ void tm_trap_test(void)
 			srand(time(NULL) + getpid());
 			if (args & ARG_MESS_WITH_TM_AT) {
 				mess_with_tm();
-				printf("!");
 			}
 			raise(SIGUSR1);
 			exit(0);
@@ -216,20 +223,27 @@ void tm_trap_test(void)
 			int ret;
 			wait(&ret);
 		}
-#ifdef STOP
-		i++;
-#endif
 	}
 
 	free(ckuc);
-	return;
+	return NULL;
 }
 
 
 int tm_signal_force_msr(void)
 {
+  pthread_t *threads;
 
-	tm_trap_test();
+  threads = malloc(nthread*sizeof(pthread_t));
+	int rc, t;
+
+	for(t=0; t<nthread; t++){
+		rc = pthread_create(&threads[t], NULL, tm_trap_test, (void *)&t);
+	}
+
+	for (t=0; t<nthread; t++) {
+	  rc = pthread_join(threads[t], NULL);
+	}
 
 	return 0;
 }
@@ -242,6 +256,8 @@ void show_help(char *name)
 	printf("\t-a\tMess with TM after raising a SIGUSR1 signal\n");
 	printf("\t-m\tMess with MSR[TS] bits at signal handler machine context\n");
 	printf("\t-x\tMess with everything above\n");
+	printf("\t-t\tAmount of threads\n");
+	printf("\t-s\tBe less verbose\n");
 	exit(-1);
 }
 
@@ -249,7 +265,7 @@ int main(int argc, char **argv)
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "hbaxmt")) != -1) {
+	while ((opt = getopt(argc, argv, "hbaxmt:")) != -1) {
 		if (opt == 'b') {
 			printf("Mess with TM before signal\n");
 			args |= ARG_MESS_WITH_TM_BEFORE;
@@ -262,6 +278,9 @@ int main(int argc, char **argv)
 		} else if (opt == 'x') {
 			printf("Mess with everything above\n");
 			args |= ARG_BOOM;
+		} else if (opt == 't') {
+		        nthread = atoi(optarg);
+			printf("Using %d threads\n", nthread);
 		} else if (opt == 'h') {
 			show_help(argv[0]);
 		}

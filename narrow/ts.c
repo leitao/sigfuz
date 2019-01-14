@@ -9,6 +9,7 @@
  */
 
 #define _GNU_SOURCE
+#include <ucontext.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <limits.h>
@@ -30,6 +31,7 @@
 
 static int count = 0;
 static int first_time = 0;
+ucontext_t ctx;
 
 /* Should be an argument. TODO */
 //#define STOP
@@ -38,12 +40,23 @@ static int first_time = 0;
 /* checkpoint context */
 ucontext_t *ckuc;
 
-void mess_with_tm()
+int mess_with_tm()
 {
 	if (1) {
-		asm ("tbegin.	;"
-		     "beq 8	;");
-		asm("tsuspend.	;");
+		asm goto ("tbegin.	;"
+			  "beq %l[bye]	;"
+			  "tsuspend.	;":
+			: : : bye);
+
+bye:
+	return 0;
+	}
+}
+
+int unmess_with_tm()
+{
+	if (1) {
+		asm ("tresume.	;");
 	}
 }
 
@@ -51,44 +64,70 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 {
 	ucontext_t *ucp = uc;
 
-	ucp->uc_link = ckuc;
+	//ucp->uc_link = ckuc;
 
-	memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
+	printf("Trap\n");
+	mess_with_tm();
+	//memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
 
-	ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] &=  ~MSR_TS_S;
-	ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] &= ~MSR_TS_T;
-	ucp->uc_mcontext.gp_regs[PT_MSR] &=  ~MSR_TS_S;
-	ucp->uc_mcontext.gp_regs[PT_MSR] &= ~MSR_TS_T;
-
+//	ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] &=  ~MSR_TS_S;
+//	ucp->uc_link->uc_mcontext.gp_regs[PT_MSR] &= ~MSR_TS_T;
+//	ucp->uc_mcontext.gp_regs[PT_MSR] &=  ~MSR_TS_S;
+//	ucp->uc_mcontext.gp_regs[PT_MSR] &= ~MSR_TS_T;
+//
 	/* 1/100 of the runs mess up with MSR */
 
-	printf("%lx %lx\n", ucp->uc_mcontext.gp_regs[PT_MSR], ucp->uc_link->uc_mcontext.gp_regs[PT_MSR]);
-	mess_with_tm();
+//	printf("%lx %lx\n", ucp->uc_mcontext.gp_regs[PT_MSR], ucp->uc_link->uc_mcontext.gp_regs[PT_MSR]);
+	//mess_with_tm();
+}
+
+void seg_signal_handler(int signo, siginfo_t *si, void *uc)
+{
+	printf("Got segfault\n");
+	setcontext(&ctx);	
 }
 
 void tm_trap_test(void)
 {
 	struct sigaction trap_sa;
+	struct sigaction seg_sa;
 
 	ckuc = malloc(sizeof(ucontext_t));
 
 	trap_sa.sa_flags = SA_SIGINFO;
 	trap_sa.sa_sigaction = trap_signal_handler;
 
-	/* The signal handler will enable MSR_TS */
+	seg_sa.sa_flags = SA_SIGINFO;
+	seg_sa.sa_sigaction = seg_signal_handler;
+
+	sigaction(SIGSEGV, &seg_sa, NULL);
 	sigaction(SIGUSR1, &trap_sa, NULL);
 
-	mess_with_tm();
+	getcontext(&ctx);
+
+	printf("Messing\n");
+	//mess_with_tm();
+	printf("raising\n");
 	raise(SIGUSR1);
+	unmess_with_tm();
 
 	free(ckuc);
 	return;
 }
 
+
+
+
+#define MAX 	1024*1024
 int tm_signal_force_msr(void)
 {
+	int i = 0;
 
-	tm_trap_test();
+	while (i < MAX) {
+		printf("%d\n", i);
+		tm_trap_test();
+		i++;
+	}
 
 	return 0;
 }
