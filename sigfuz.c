@@ -4,8 +4,6 @@
  *
  * This is a Powerpc signal fuzzer. Where the output means:
  *
- * '.' An random context was generated
- * '!' A segmentation fault happened
  */
 
 #include <stdio.h>
@@ -29,19 +27,21 @@
 #define MSR_TS_T        __MASK(MSR_TS_T_LG)     /*  Transaction Suspended */
 #define COUNT_MAX       1000		/* Number of interactions */
 
-#define ARG_MESS_WITH_TM_AT	1
-#define ARG_MESS_WITH_TM_BEFORE 2
-#define ARG_MESS_WITH_MSR_AT	4
-#define ARG_SILENT		8
+#define ARG_MESS_WITH_TM_AT	0x1
+#define ARG_MESS_WITH_TM_BEFORE 0x2
+#define ARG_MESS_WITH_MSR_AT	0x4
+#define ARG_FOREVER		0x10
 #define ARG_BOOM		-1
 
-static int first_time = 0;
 static int args;
 static int nthread = 1;
+static int count_max = COUNT_MAX;
 
 /* checkpoint context */
 ucontext_t *ckuc;
 
+/* pointer used to for freeing purpose */
+static void *f;
 
 /* Returns a 64-bits random number */
 long long r(){
@@ -53,11 +53,16 @@ long long r(){
 	return f;
 }
 
-int set_random(void *ptr, int chance, int bytes)
+
+/*
+ * Set a pointer (ptr) value (nbytes wide) with random number, with
+ * 1/chance probability
+ */
+int set_random(void *ptr, int chance, int nbytes)
 {
 	long long v;
 	if ((rand() % chance) == 0) {
-		switch (bytes) {
+		switch (nbytes) {
 			case 1:
 				v = rand() %  UCHAR_MAX + 1;
 				*(char *)ptr = v;
@@ -84,38 +89,49 @@ int set_random(void *ptr, int chance, int bytes)
 	return 0;
 } 
 
+/* Return true with 1/x probability */
 int one_in_chance(int x)
 {
 	return rand()%x == 0;
 }
 
+/* Change TM states */
 void mess_with_tm()
 {
-	/* Starts a transaction 20% of the time */
+	/* Starts a transaction 33% of the time */
 	if (one_in_chance(3)) {
 		asm ("tbegin.	;"
 		     "beq 8	;");
+		/* And suspended half of them */
 		if (one_in_chance(2))
 			asm("tsuspend.	;");
 	}
 
+	/* Terminate 5% of them */
 	if (one_in_chance(20))
 		asm("tend.	;");
 }
 
+/* Signal handler that will be invoked with raise() */
 void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 {
 	ucontext_t *ucp = uc;
 
 	ucp->uc_link = ckuc;
 
-	/*  returns a garbase context 1/10 times */
+	/*
+	 * Set uc_link in three possible ways:
+	 *  - Setting a single 'int' in the whole chunk
+	 *  - Cloning ucp into uc_link
+	 *  - Allocating a new memory chunk
+	 */
 	if (one_in_chance(3))
 		memset(ucp->uc_link, rand(), sizeof(ucontext_t));
 	else if (one_in_chance(2))
 		memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
 	else {
-		ucp->uc_link = malloc(sizeof(ucontext_t));
+		ckuc = malloc(sizeof(ucontext_t));
+		ucp->uc_link = ckuc;
 		madvise(ucp->uc_link, sizeof(ucontext_t), MADV_DONTNEED);
 	}
 
@@ -184,8 +200,7 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 
 void seg_signal_handler(int signo, siginfo_t *si, void *uc)
 {
-
-	exit(-1);
+	exit(0);
 }
 
 
@@ -208,8 +223,7 @@ void *tm_trap_test(void *thrid)
 	/* If it does not crash, it will segfault, avoid it to retest */
 	sigaction(SIGSEGV, &seg_sa, NULL);
 
-
-	while ( i < COUNT_MAX) {
+	while (i < count_max) {
 		pid_t t = fork();
 		if (t == 0) {
 			/* Once seed per process */
@@ -218,23 +232,29 @@ void *tm_trap_test(void *thrid)
 				mess_with_tm();
 			}
 			raise(SIGUSR1);
+			if (f != NULL) {
+				printf("%d\n", __LINE__);
+				free(f);
+				f = NULL;
+			}
 			exit(0);
 		} else {
 			int ret;
 			wait(&ret);
 		}
+		if (!(args & ARG_FOREVER))
+			i++;
 	}
 
-	free(ckuc);
 	return NULL;
 }
 
 
 int tm_signal_force_msr(void)
 {
-  pthread_t *threads;
+	pthread_t *threads;
 
-  threads = malloc(nthread*sizeof(pthread_t));
+	threads = malloc(nthread*sizeof(pthread_t));
 	int rc, t;
 
 	for(t=0; t<nthread; t++){
@@ -242,8 +262,10 @@ int tm_signal_force_msr(void)
 	}
 
 	for (t=0; t<nthread; t++) {
-	  rc = pthread_join(threads[t], NULL);
+		rc = pthread_join(threads[t], NULL);
 	}
+
+	free(threads);
 
 	return 0;
 }
@@ -256,8 +278,9 @@ void show_help(char *name)
 	printf("\t-a\tMess with TM after raising a SIGUSR1 signal\n");
 	printf("\t-m\tMess with MSR[TS] bits at signal handler machine context\n");
 	printf("\t-x\tMess with everything above\n");
+	printf("\t-f\tRun forever and does not exit\n");
+	printf("\t-i\tAmount of interactions. Default = %d\n", COUNT_MAX);
 	printf("\t-t\tAmount of threads\n");
-	printf("\t-s\tBe less verbose\n");
 	exit(-1);
 }
 
@@ -265,7 +288,7 @@ int main(int argc, char **argv)
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "hbaxmt:")) != -1) {
+	while ((opt = getopt(argc, argv, "bamxt:fi:h")) != -1) {
 		if (opt == 'b') {
 			printf("Mess with TM before signal\n");
 			args |= ARG_MESS_WITH_TM_BEFORE;
@@ -276,11 +299,17 @@ int main(int argc, char **argv)
 			printf("Mess with MSR[TS] bits at signal handler machine context\n");
 			args |= ARG_MESS_WITH_MSR_AT;
 		} else if (opt == 'x') {
-			printf("Mess with everything above\n");
+			printf("Running complete fuzzer\n");
 			args |= ARG_BOOM;
 		} else if (opt == 't') {
 		        nthread = atoi(optarg);
-			printf("Using %d threads\n", nthread);
+			printf("Threads := %d\n", nthread);
+		} else if (opt == 'f') {
+			args |= ARG_FOREVER;
+			printf("Press ^C to stop\n");
+		} else if (opt == 'i') {
+		        count_max = atoi(optarg);
+			printf("Running for %d interactions\n", count_max);
 		} else if (opt == 'h') {
 			show_help(argv[0]);
 		}
