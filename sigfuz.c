@@ -2,8 +2,7 @@
  * Copyright 2018, Breno Leitao, IBM Corp.
  * Licensed under GPLv2.
  *
- * This is a Powerpc signal fuzzer. Where the output means:
- *
+ * This is a Powerpc signal fuzzer.
  */
 
 #include <stdio.h>
@@ -26,22 +25,20 @@
 #define MSR_TS_S        __MASK(MSR_TS_S_LG)     /*  Transaction Suspended */
 #define MSR_TS_T        __MASK(MSR_TS_T_LG)     /*  Transaction Suspended */
 #define COUNT_MAX       1000		/* Number of interactions */
+#define THREADS		1
 
 #define ARG_MESS_WITH_TM_AT	0x1
-#define ARG_MESS_WITH_TM_BEFORE 0x2
+#define ARG_MESS_WITH_TM_BEFORE	0x2
 #define ARG_MESS_WITH_MSR_AT	0x4
 #define ARG_FOREVER		0x10
-#define ARG_BOOM		-1
+#define ARG_BOOM		ARG_MESS_WITH_TM_AT | ARG_MESS_WITH_TM_BEFORE | ARG_MESS_WITH_MSR_AT
 
 static int args;
-static int nthread = 1;
+static int nthread = THREADS;
 static int count_max = COUNT_MAX;
 
 /* checkpoint context */
 ucontext_t *ckuc;
-
-/* pointer used to for freeing purpose */
-static void *f;
 
 /* Returns a 64-bits random number */
 long long r(){
@@ -130,6 +127,7 @@ void trap_signal_handler(int signo, siginfo_t *si, void *uc)
 	else if (one_in_chance(2))
 		memcpy(ucp->uc_link, uc, sizeof(ucontext_t));
 	else {
+		free(ckuc);
 		ckuc = malloc(sizeof(ucontext_t));
 		ucp->uc_link = ckuc;
 		madvise(ucp->uc_link, sizeof(ucontext_t), MADV_DONTNEED);
@@ -232,11 +230,6 @@ void *tm_trap_test(void *thrid)
 				mess_with_tm();
 			}
 			raise(SIGUSR1);
-			if (f != NULL) {
-				printf("%d\n", __LINE__);
-				free(f);
-				f = NULL;
-			}
 			exit(0);
 		} else {
 			int ret;
@@ -279,8 +272,8 @@ void show_help(char *name)
 	printf("\t-m\tMess with MSR[TS] bits at signal handler machine context\n");
 	printf("\t-x\tMess with everything above\n");
 	printf("\t-f\tRun forever and does not exit\n");
-	printf("\t-i\tAmount of interactions. Default = %d\n", COUNT_MAX);
-	printf("\t-t\tAmount of threads\n");
+	printf("\t-i\tAmount of interactions.	(Default = %d)\n", COUNT_MAX);
+	printf("\t-t\tAmount of threads.	(Default = %d)\n", THREADS);
 	exit(-1);
 }
 
